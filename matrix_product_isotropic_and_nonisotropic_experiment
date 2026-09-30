@@ -1,0 +1,277 @@
+function results = matrix_product_isotropic_and_nonisotropic_experiment()
+% Run the isotropic and non-isotropic matrix-valued product experiments.
+
+rng('shuffle');
+
+d = 16;
+r = 16;
+m = 32;
+n = 90;
+numTrials = 15;
+nGrid = [20 40 60 80];
+D = diag(linspace(0.25, 2, d));
+
+rootDir = fileparts(mfilename('fullpath'));
+if isempty(rootDir)
+    rootDir = pwd;
+end
+figDir = fullfile(rootDir, 'Figures');
+if ~exist(figDir, 'dir')
+    mkdir(figDir);
+end
+
+parameters = struct('d', d, 'r', r, 'm', m, 'n', n, ...
+    'numTrials', numTrials, 'nGrid', nGrid);
+modeNames = {'isotropic', 'nonisotropic'};
+
+for modeIdx = 1:numel(modeNames)
+    modeName = modeNames{modeIdx};
+    data = run_experiment(modeName, d, r, m, n, numTrials, nGrid, D);
+    data.parameters = parameters;
+    data.figures = plot_results(data, modeName, figDir);
+    results.(modeName) = data;
+end
+
+results.parameters = parameters;
+disp('Combined isotropic and non-isotropic matrix-valued product experiments');
+disp(parameters);
+disp(results.isotropic.figures);
+disp(results.nonisotropic.figures);
+end
+
+function data = run_experiment(modeName, d, r, m, n, numTrials, nGrid, D)
+rhoAlg1Trials = zeros(n + 1, numTrials);
+rhoGreedyTrials = zeros(n + 1, numTrials);
+rhoRandomizedTrials = zeros(n + 1, numTrials);
+rhoCyclicTrials = zeros(n + 1, numTrials);
+runtimeAlg1Trials = zeros(numel(nGrid), numTrials);
+runtimeGreedyTrials = zeros(numel(nGrid), numTrials);
+runtimeRandomizedTrials = zeros(numel(nGrid), numTrials);
+runtimeCyclicTrials = zeros(numel(nGrid), numTrials);
+
+for trial = 1:numTrials
+    A = make_initial_matrix(d, r);
+    V = make_candidate_vectors(modeName, d, m, n, D);
+
+    [~, rhoAlg1Trials(:, trial)] = run_algorithm1(A, V, n);
+    [~, rhoGreedyTrials(:, trial)] = run_greedy(A, V, n);
+    [~, rhoRandomizedTrials(:, trial)] = run_randomized(A, V, n);
+    [~, rhoCyclicTrials(:, trial)] = run_cyclic(A, V, n);
+
+    for idx = 1:numel(nGrid)
+        steps = nGrid(idx);
+        [~, ~, runtimeAlg1Trials(idx, trial)] = run_algorithm1(A, V, steps);
+        [~, ~, runtimeGreedyTrials(idx, trial)] = run_greedy(A, V, steps);
+        [~, ~, runtimeRandomizedTrials(idx, trial)] = run_randomized(A, V, steps);
+        [~, ~, runtimeCyclicTrials(idx, trial)] = run_cyclic(A, V, steps);
+    end
+end
+
+data.rhoAlg1 = mean(rhoAlg1Trials, 2);
+data.rhoGreedy = mean(rhoGreedyTrials, 2);
+data.rhoRandomized = mean(rhoRandomizedTrials, 2);
+data.rhoCyclic = mean(rhoCyclicTrials, 2);
+data.runtimeAlg1 = mean(runtimeAlg1Trials, 2);
+data.runtimeGreedy = mean(runtimeGreedyTrials, 2);
+data.runtimeRandomized = mean(runtimeRandomizedTrials, 2);
+data.runtimeCyclic = mean(runtimeCyclicTrials, 2);
+data.nGrid = nGrid;
+end
+
+function A = make_initial_matrix(d, r)
+[U, ~] = qr(randn(d, d), 0);
+[W, ~] = qr(randn(r, r), 0);
+singularValues = linspace(1, 0.25, min(d, r));
+Sigma = zeros(d, r);
+Sigma(1:numel(singularValues), 1:numel(singularValues)) = ...
+    diag(singularValues);
+A = U * Sigma * W';
+A = A / norm(A, 2);
+end
+
+function V = make_candidate_vectors(modeName, d, m, n, D)
+V = cell(n, 1);
+for k = 1:n
+    G = randn(d, m);
+    if strcmp(modeName, 'isotropic')
+        S = G * G';
+        [E, Lambda] = eig(S);
+        invSqrt = E * diag(1 ./ sqrt(diag(Lambda))) * E';
+        V{k} = invSqrt * G;
+    else
+        V{k} = D * G;
+    end
+end
+end
+
+function figures = plot_results(data, modeName, figDir)
+figures.decayPdf = fullfile(figDir, [modeName '_spectral_decay.pdf']);
+figures.runtimePdf = fullfile(figDir, [modeName '_runtime.pdf']);
+
+k = 0:(numel(data.rhoAlg1) - 1);
+save_decay_figure(k, data, figures.decayPdf);
+save_runtime_figure(data.nGrid, data, figures.runtimePdf);
+end
+
+function save_decay_figure(k, data, filename)
+fig = figure('Color', 'w', 'Position', [100 100 840 600], 'Visible', 'off');
+semilogy(k, data.rhoAlg1, '-', 'LineWidth', 2.2);
+hold on;
+semilogy(k, data.rhoGreedy, '--', 'LineWidth', 2.0);
+semilogy(k, data.rhoRandomized, '-.', 'LineWidth', 2.0);
+semilogy(k, data.rhoCyclic, ':', 'LineWidth', 2.2);
+grid off;
+xlabel('Number of projections k');
+ylabel('Relative squared spectral norm');
+legend({'Algorithm 1', 'Greedy', 'Randomized', 'Cyclic'}, ...
+    'Location', 'southwest');
+xlim([0, k(end)]);
+write_figure(fig, filename);
+end
+
+function save_runtime_figure(nGrid, data, filename)
+fig = figure('Color', 'w', 'Position', [100 100 840 600], 'Visible', 'off');
+semilogy(nGrid, data.runtimeAlg1, '-o', 'LineWidth', 2.2, 'MarkerSize', 8);
+hold on;
+semilogy(nGrid, data.runtimeGreedy, '--s', 'LineWidth', 2.0, 'MarkerSize', 8);
+semilogy(nGrid, data.runtimeRandomized, '-.^', 'LineWidth', 2.0, 'MarkerSize', 8);
+semilogy(nGrid, data.runtimeCyclic, ':d', 'LineWidth', 2.2, 'MarkerSize', 8);
+grid off;
+xlabel('Number of projections n');
+ylabel('Wall-clock time (seconds)');
+legend({'Algorithm 1', 'Greedy', 'Randomized', 'Cyclic'}, ...
+    'Location', 'northwest');
+xlim([nGrid(1), nGrid(end)]);
+write_figure(fig, filename);
+end
+
+function write_figure(fig, filename)
+set(fig, 'PaperUnits', 'inches');
+set(fig, 'PaperPosition', [0 0 8.4 6.0]);
+set(fig, 'PaperSize', [8.4 6.0]);
+print(fig, filename, '-dpdf', '-painters', '-bestfit');
+if ishandle(fig)
+    close(fig);
+end
+end
+
+function [selected, rho, elapsed] = run_algorithm1(A, V, n)
+[d, r] = size(A);
+m = size(V{1}, 2);
+selected = zeros(1, n);
+rho = zeros(n + 1, 1);
+baseNorm2 = norm(A, 2)^2;
+rho(1) = 1;
+Q = A';
+M = A' * A;
+
+tic;
+for k = 1:n
+    theta = zeros(m, 1);
+    candidateQ = cell(m, 1);
+    candidateM = cell(m, 1);
+
+    for ell = 1:m
+        v = V{k}(:, ell);
+        nv = v' * v;
+        qv = Q * v;
+        candidateQ{ell} = Q - (qv * v') / nv;
+        candidateM{ell} = M - (qv * qv') / nv;
+
+        charCoeff = poly(candidateM{ell});
+        if r <= d
+            hCoeff = zeros(1, d + 1);
+            hCoeff(1:(r + 1)) = charCoeff;
+        else
+            hCoeff = charCoeff(1:(d + 1));
+        end
+
+        if n - k > 0
+            degrees = d:-1:0;
+            hCoeff = hCoeff .* ((degrees / d) .^ (n - k));
+        end
+        last = find(hCoeff ~= 0, 1, 'last');
+        hasZeroRoot = last < numel(hCoeff);
+        hRoots = roots(hCoeff(1:last));
+        theta(ell) = max(hRoots);
+        if hasZeroRoot
+            theta(ell) = max(theta(ell), 0);
+        end
+    end
+
+    [~, best] = min(theta);
+    selected(k) = best;
+    Q = candidateQ{best};
+    M = candidateM{best};
+    rho(k + 1) = norm(Q, 2)^2 / baseNorm2;
+end
+elapsed = toc;
+end
+
+function [selected, rho, elapsed] = run_greedy(A, V, n)
+m = size(V{1}, 2);
+selected = zeros(1, n);
+rho = zeros(n + 1, 1);
+baseNorm2 = norm(A, 2)^2;
+rho(1) = 1;
+B = A;
+
+tic;
+for k = 1:n
+    scores = zeros(m, 1);
+    candidates = cell(m, 1);
+    for ell = 1:m
+        v = V{k}(:, ell);
+        candidates{ell} = B - v * (v' * B) / (v' * v);
+        scores(ell) = norm(candidates{ell}, 2)^2;
+    end
+    [~, best] = min(scores);
+    selected(k) = best;
+    B = candidates{best};
+    rho(k + 1) = norm(B, 2)^2 / baseNorm2;
+end
+elapsed = toc;
+end
+
+function [selected, rho, elapsed] = run_randomized(A, V, n)
+selected = zeros(1, n);
+rho = zeros(n + 1, 1);
+baseNorm2 = norm(A, 2)^2;
+rho(1) = 1;
+B = A;
+
+tic;
+for k = 1:n
+    probabilities = sum(V{k}.^2, 1);
+    probabilities = probabilities / sum(probabilities);
+    cdf = cumsum(probabilities(:));
+    best = find(rand() <= cdf, 1, 'first');
+    if isempty(best)
+        best = numel(probabilities);
+    end
+    selected(k) = best;
+    v = V{k}(:, best);
+    B = B - v * (v' * B) / (v' * v);
+    rho(k + 1) = norm(B, 2)^2 / baseNorm2;
+end
+elapsed = toc;
+end
+
+function [selected, rho, elapsed] = run_cyclic(A, V, n)
+m = size(V{1}, 2);
+selected = zeros(1, n);
+rho = zeros(n + 1, 1);
+baseNorm2 = norm(A, 2)^2;
+rho(1) = 1;
+B = A;
+
+tic;
+for k = 1:n
+    best = mod(k - 1, m) + 1;
+    selected(k) = best;
+    v = V{k}(:, best);
+    B = B - v * (v' * B) / (v' * v);
+    rho(k + 1) = norm(B, 2)^2 / baseNorm2;
+end
+elapsed = toc;
+end
